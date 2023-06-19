@@ -18,7 +18,7 @@ To run this notebook, you'll need the following dependencies:
 
 ## Dataset
 
-The tutorial uses a dataset of Spanish-English sentence pairs. However, the dataset itself is not provided in this tutorial. You'll need to obtain a suitable dataset or use your own parallel corpus of Spanish-English sentences.
+I use a dataset of Spanish-English sentence pairs. However, the dataset itself is not provided here.
 
 ## Training
 
