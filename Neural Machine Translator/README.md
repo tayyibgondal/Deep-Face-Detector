@@ -12,8 +12,8 @@ The project provides a step-by-step guide to train an encoder-decoder model with
 
 To run this notebook, you'll need the following dependencies:
 
-- Python (version X.X.X)
-- TensorFlow (version X.X.X)
+- Python 
+- TensorFlow 
 - Other necessary libraries
 
 ## Dataset
