@@ -4,6 +4,7 @@ from torch.nn import functional as F
 import glob
 import os
 import numpy as np
+import pandas as pd
 from scipy import signal
 import mne
 
@@ -11,12 +12,14 @@ import mne
 
 original_sampling_freq = 200
 target_sampling_freq = 100
-B = 1  # batch size
+B = 32  # batch size
 S = 21  # channels
 C = 120  # convolutional dimension depth
 L = 150  # segment length
 M = L // 5  # reduced temporal dimension
 num_heads = 5
+path_to_label_ref_csv = r"C:\Users\DELL\Downloads\tukl\Implementations\eegformer\dataset_s\new.csv"
+root_dir = r"C:\Users\DELL\Downloads\tukl\Implementations\eegformer\dataset_s\*\*\*.edf"
 
 # ============================================
 # DATA LOADING AND PREPROCESSING
@@ -42,10 +45,6 @@ def detrend_signal(signal_data):
     detrended_signal = signal.detrend(signal_data, axis=1)
     return torch.tensor(detrended_signal, dtype=torch.float64)
 
-def segmentor(data):
-    # returns all batches and all channels, only segments the temporal dimension
-    return data[:, :, :L] 
-
 def pad_tensor(tensor, dim, length):
     '''
     takes in a tensor, and if certain dimension dim
@@ -65,6 +64,109 @@ def pad_tensor(tensor, dim, length):
     padded_tensor = torch.cat((tensor, padding), dim=dim)
 
     return padded_tensor
+
+def generate_label_ref(path):
+    '''generates label ref dictionary from
+    the csv file'''
+    labels_file_path = path
+    # Load the CSV file into a DataFrame
+    df = pd.read_csv(labels_file_path)
+
+    paths = df["paths"].tolist()
+    labels = df["labels"].tolist()
+
+    label_reference = dict(zip(paths, labels))
+    
+    return label_reference
+
+def generate_unsegmented_dataset(file_paths, label_reference):
+    xs = [] # list of tensors
+    ys = [] # list of numbers
+
+    xs_eval = []
+    ys_eval = []
+
+    for file_path in file_paths:
+        # do not add eval data to the dataset
+        if 'eval' in file_path:
+            # if the label for the filepath is present in the reference, only then append label and path to dataset
+            try:
+                ys_eval.append(label_reference[file_path]) # numbers
+            except:
+                continue
+            edf_file = mne.io.read_raw_edf(file_path)
+            eeg_data = edf_file.get_data()
+            downsampled_eeg_data = downsample_signal(original_sampling_freq, target_sampling_freq, eeg_data)
+            detrended_eeg_data = detrend_signal(downsampled_eeg_data)  # tensor
+            xs_eval.append(detrended_eeg_data)
+        else:
+            # if the label for the filepath is present in the reference, only then append label and path to dataset
+            try:
+                ys.append(label_reference[file_path]) # numbers
+            except:
+                continue
+            edf_file = mne.io.read_raw_edf(file_path)
+            eeg_data = edf_file.get_data()
+            downsampled_eeg_data = downsample_signal(original_sampling_freq, target_sampling_freq, eeg_data)
+            detrended_eeg_data = detrend_signal(downsampled_eeg_data)  # tensor
+            xs.append(detrended_eeg_data)
+    
+    return xs, ys, xs_eval, ys_eval
+
+def segmented_dataset_builder(xs, ys, xs_eval, ys_eval, segment_length, dim):
+    data_X = []
+    data_Y = []
+
+    data_X_eval = []
+    data_Y_eval = []
+
+    index = 0
+    for tensor in xs:
+        label = ys[index]
+        for i in range(tensor.size(dim) // segment_length):
+            start_idx = i * segment_length
+            end_idx = start_idx + segment_length
+
+            # Extract the segment
+            segment = tensor[:, start_idx:end_idx]
+
+            # Update data arrays
+            data_X.append(segment.tolist())
+            data_Y.append(label)
+
+    for tensor in xs_eval:
+        label = ys_eval[index]
+        for i in range(tensor.size(dim) // segment_length):
+            start_idx = i * segment_length
+            end_idx = start_idx + segment_length
+
+            # Extract the segment
+            segment = tensor[:, start_idx:end_idx]
+
+            # Update data arrays
+            data_X_eval.append(segment.tolist())
+            data_Y_eval.append(label)
+
+        data_X = torch.tensor(data_X)
+        data_Y = torch.tensor(data_Y)
+        data_X_eval = torch.tensor(data_X_eval)
+        data_Y_eval = torch.tensor(data_Y_eval)
+        
+        return data_X.double(), data_Y.double(), data_X_eval.double(), data_Y_eval.double()
+
+def get_batch(split):
+    if split == "train":
+        data = X  # global
+        label = Y  # global
+    elif split == "eval":
+        data = X_eval  # global
+        label = Y_eval  # global
+
+    ix = torch.randint(data.size(0), (B,))
+    x = torch.stack([data[i] for i in ix])
+    y = torch.stack([label[i] for i in ix])
+
+    return x, y
 
 # ============================================
 # 1DCNN BLOCK
@@ -531,7 +633,7 @@ class EEGFormer(nn.Module):
  
     def forward(self, x):
         # x is detrended eeg segment
-        x = self.conv1d_layer(x)
+        # x = self.conv1d_layer(x)
         x = pad_tensor(x, dim=2, length=L)
         x = self.br(x.unsqueeze(0))
         x = RegionalToSynchronousShapeShifter(x)
@@ -542,15 +644,15 @@ class EEGFormer(nn.Module):
         return x
     
 
+file_paths = find_files_by_extension(root_dir)  # list of paths
+label_reference = generate_label_ref(path_to_label_ref_csv)  # dictionary
+X_unseg, Y_unseg, X_eval_unseg, Y_eval_unseg = generate_unsegmented_dataset(file_paths, label_reference)
+X, Y, X_eval, Y_eval = segmented_dataset_builder(X_unseg, Y_unseg, X_eval_unseg, Y_eval_unseg, L, 1)   
 
-edf_file = mne.io.read_raw_edf(r'C:\Users\DELL\Downloads\tukl\Implementations\eegformer\dataset_s\abnormal\eval\0000036.edf')
-eeg_data = edf_file.get_data()
-downsampled_eeg_data = downsample_signal(original_sampling_freq, target_sampling_freq, eeg_data)
-x = downsampled_eeg_data[:, :L]
-x = detrend_signal(x)
+xb, yb = get_batch('train')
 
 model = EEGFormer(B, S, C, L, M)
-prediction = model(x)
+prediction = model(xb)
 
 print(f'Prediction: {prediction}')
 
