@@ -20,6 +20,7 @@ M = L // 5  # reduced temporal dimension
 num_heads = 5
 path_to_label_ref_csv = r"C:\Users\DELL\Downloads\tukl\Implementations\eegformer\dataset_s\new.csv"
 root_dir = r"C:\Users\DELL\Downloads\tukl\Implementations\eegformer\dataset_s\*\*\*.edf"
+dropout = 0.01
 
 # ============================================
 # DATA LOADING AND PREPROCESSING
@@ -174,9 +175,9 @@ def get_batch(split):
 class CNN1D(nn.Module):
     def __init__(self, S=21, L=150, C=120):
         super().__init__()
-        self.S = S
-        self.L = L
-        self.C = C
+        self.S = S  # no. of channels
+        self.L = L  # no. of sampled points
+        self.C = C  # depth of convolutional dimension
         self.conv_layer_1 = nn.Conv1d(1, C, kernel_size=4)
         self.conv_layer_2 = nn.Conv1d(C, C, kernel_size=4)
         self.conv_layer_3 = nn.Conv1d(C, C, kernel_size=4)
@@ -189,14 +190,14 @@ class CNN1D(nn.Module):
     def forward(self, x):
         outputs = []
         for i in range(self.S):
-            input_row = x[i].unsqueeze(0).unsqueeze(0)  # (batch_size=1, channels=1, length=num_columns)
+            input_row = x[:, i:i+1, :]  # (batch_size=1, channels=1, length=num_columns)
             output_tensor = self.conv_layer_1(input_row)
             output_tensor = self.conv_layer_2(output_tensor)
             output_tensor = self.conv_layer_3(output_tensor)
             output_tensor = self.conv_layer_4(output_tensor)
-            outputs.append(output_tensor)
+            outputs.append(output_tensor.unsqueeze(1))
 
-        output_tensor = torch.cat(outputs, dim=0)
+        output_tensor = torch.cat(outputs, dim=1)
         return output_tensor
     
 # ============================================
@@ -215,7 +216,7 @@ class RegionalHead(nn.Module):
         self.query = nn.Linear(self.n_embed, self.head_size, bias=False).double()
         self.value = nn.Linear(self.n_embed, self.head_size, bias=False).double()
         self.register_buffer('tril', torch.tril(torch.ones(self.block_size, self.block_size)))
-        self.dropout = nn.Dropout(0.01)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
         B, S_, C_, L_ = x.shape
@@ -247,7 +248,7 @@ class RegionalMultiHeadAttention(nn.Module):
         super().__init__()
         self.heads = nn.ModuleList([RegionalHead(head_size, C, L) for _ in range(num_heads)])
         self.proj = nn.Linear(L, L).double()
-        self.dropout = nn.Dropout(0.001)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
         out = torch.cat([h(x) for h in self.heads], dim=-1)
@@ -276,7 +277,7 @@ class FeedFowardRegional(nn.Module):
             nn.Linear(L, 4*L), 
             nn.ReLU(),
             nn.Linear(4*L, L),
-            nn.Dropout(0.001),
+            nn.Dropout(dropout),
         ).double()
 
     def forward(self, x):
@@ -334,8 +335,7 @@ class SynchronousHead(nn.Module):
         self.key = nn.Linear(self.n_embed, self.head_size, bias=False).double()
         self.query = nn.Linear(self.n_embed, self.head_size, bias=False).double()
         self.value = nn.Linear(self.n_embed, self.head_size, bias=False).double()
-        self.register_buffer('tril', torch.tril(torch.ones(self.block_size, self.block_size)))
-        self.dropout = nn.Dropout(0.01)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
         b, c, s, l= x.shape
@@ -366,7 +366,7 @@ class SynchronousMultiHeadAttention(nn.Module):
         super().__init__()
         self.heads = nn.ModuleList([SynchronousHead(head_size, S, L) for _ in range(num_heads)])
         self.proj = nn.Linear(L, L).double()
-        self.dropout = nn.Dropout(0.001)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
         out = torch.cat([h(x) for h in self.heads], dim=-1)
@@ -395,7 +395,7 @@ class FeedFowardSync(nn.Module):
             nn.Linear(L, 4*L), 
             nn.ReLU(),
             nn.Linear(4*L, L),
-            nn.Dropout(0.001),
+            nn.Dropout(dropout),
         ).double()
 
     def forward(self, x):
@@ -481,7 +481,7 @@ class HeadTemporal(nn.Module):
         self.query = nn.Linear(n_embed, head_size, bias=False).double()
         self.value = nn.Linear(n_embed, head_size, bias=False).double()
 
-        self.dropout = nn.Dropout(0.01)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
         B,T,C = x.shape
@@ -504,7 +504,7 @@ class MultiHeadAttentionTemporal(nn.Module):
         self.n_embed = n_embed
         self.heads = nn.ModuleList([HeadTemporal(head_size, self.n_embed) for _ in range(num_heads)])
         self.proj = nn.Linear(self.n_embed, self.n_embed).double()
-        self.dropout = nn.Dropout(0.01)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
         out = torch.cat([h(x) for h in self.heads], dim=-1)
@@ -520,7 +520,7 @@ class FeedFowardTemporal(nn.Module):
             nn.Linear(n_embd, 4 * n_embd),
             nn.ReLU(),
             nn.Linear(4 * n_embd, n_embd),
-            nn.Dropout(0.001),
+            nn.Dropout(dropout),
         ).double()
 
     def forward(self, x):
@@ -630,31 +630,40 @@ class EEGFormer(nn.Module):
         self.temporal = TemporalTransformer(S, C, L, M=M) 
         self.bt = TemporalBlock(S*C, n_head=product_of_2_least_common_factors(S*C))  # nembd, nhead
         self.decoder = Decoder(B, M, S, C)
- 
+
     def forward(self, x):
-        # x is detrended eeg segment
-        # x = self.conv1d_layer(x)
-        x = pad_tensor(x, dim=2, length=L)
-        x = self.br(x.unsqueeze(0))
+        # x is eeg segment
+        x = self.conv1d_layer(x)
+        x = pad_tensor(x, dim=3, length=L)
+        x = self.br(x)
         x = RegionalToSynchronousShapeShifter(x)
         x = self.bs(x)
         x = self.temporal(x)
         x = self.bt(x)
         x = self.decoder(x)
         return x
-    
 
+
+#==================================
+# DATA PREPROCESSING
+#================================== 
 file_paths = find_files_by_extension(root_dir)  # list of paths
 label_reference = generate_label_ref(path_to_label_ref_csv)  # dictionary
+# Getting unsegmented dataset
 X_unseg, Y_unseg, X_eval_unseg, Y_eval_unseg = generate_unsegmented_dataset(file_paths, label_reference)
-X, Y, X_eval, Y_eval = segmented_dataset_builder(X_unseg, Y_unseg, X_eval_unseg, Y_eval_unseg, L, 1)   
+# Making the dataset segmented 
+X, Y, X_eval, Y_eval = segmented_dataset_builder(X_unseg, Y_unseg, X_eval_unseg,
+                                                  Y_eval_unseg, segment_length=L, dim=1)   # segment along column dimension, not row dimension
 
-xb, yb = get_batch('train')
+# TESTING THE EEG FORMER INFERNCE
+# xb, yb = get_batch('train') # e.g. shape can be of form [batch_size, no_of_channels, segment_length] or [4, 21, 50]
+# model = EEGFormer(B, S, C, L, M)
+# prediction = model(xb)
+# print(f'Prediction: {prediction}')
 
-model = EEGFormer(B, S, C, L, M)
-prediction = model(xb)
-
-print(f'Prediction: {prediction}')
+#==================================
+# TRAINING LOOP
+#==================================
 
 
 
