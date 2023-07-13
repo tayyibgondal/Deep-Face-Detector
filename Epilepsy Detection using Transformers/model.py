@@ -631,15 +631,18 @@ class EEGFormer(nn.Module):
         self.C = C
         self.L = L
         self.M = M
+        self.position_embedding_table = nn.Embedding(L, 1)
         self.conv1d_layer = CNN1D(S=S, L=L, C=C)
         self.br = BlockRegional(L, num_heads)
         self.bs = BlockSync(L, num_heads)
         self.temporal = TemporalTransformer(S, C, L, M=M) 
         self.bt = TemporalBlock(S*C, n_head=product_of_2_least_common_factors(S*C))  # nembd, nhead
         self.decoder = Decoder(B, M, S, C)
+        self.position_embedding_table = nn.Embedding(L, 1)
 
     def forward(self, x, targets=None):
         # x is eeg segment
+        x = x + self.position_embedding_table(x.long()).squeeze().double()
         x = self.conv1d_layer(x)
         x = pad_tensor(x, dim=3, length=L)
         x = self.br(x)
@@ -657,7 +660,6 @@ class EEGFormer(nn.Module):
             loss = F.binary_cross_entropy(probabilities, targets)   
                      
         return x, loss
-        return x
     
 #==================================
 # LOSS ESTIMATOR
