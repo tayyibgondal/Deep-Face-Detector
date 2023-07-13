@@ -1,0 +1,4 @@
+Step 0: Train Loss 0.6936, Val Loss 0.6936
+Step 3: Train Loss 0.0000, Val Loss 0.0000
+Step 5: Train Loss 0.0000, Val Loss 0.0000
+

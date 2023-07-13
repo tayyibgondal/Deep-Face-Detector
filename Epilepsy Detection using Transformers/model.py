@@ -2,17 +2,18 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 import glob
-import os
 import numpy as np
 import pandas as pd
 from scipy import signal
 import mne
+import torch.optim as optim
+import matplotlib.pyplot as plt
 
 # ============================================
 
 original_sampling_freq = 200
 target_sampling_freq = 100
-B = 32  # batch size
+B = 4  # batch size
 S = 21  # channels
 C = 120  # convolutional dimension depth
 L = 150  # segment length
@@ -21,6 +22,12 @@ num_heads = 5
 path_to_label_ref_csv = r"C:\Users\DELL\Downloads\tukl\Implementations\eegformer\dataset_s\new.csv"
 root_dir = r"C:\Users\DELL\Downloads\tukl\Implementations\eegformer\dataset_s\*\*\*.edf"
 dropout = 0.01
+eval_iters = 1
+eval_interval = 3
+log_file_path = "loss_log.txt"
+max_iters = 6  # no. of epochs
+learning_rate = 0.01
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 # ============================================
 # DATA LOADING AND PREPROCESSING
@@ -631,7 +638,7 @@ class EEGFormer(nn.Module):
         self.bt = TemporalBlock(S*C, n_head=product_of_2_least_common_factors(S*C))  # nembd, nhead
         self.decoder = Decoder(B, M, S, C)
 
-    def forward(self, x):
+    def forward(self, x, targets=None):
         # x is eeg segment
         x = self.conv1d_layer(x)
         x = pad_tensor(x, dim=3, length=L)
@@ -641,8 +648,33 @@ class EEGFormer(nn.Module):
         x = self.temporal(x)
         x = self.bt(x)
         x = self.decoder(x)
-        return x
 
+        if targets == None:
+            loss = None
+        else:
+            B, cols = x.shape
+            probabilities = x.view(B*cols,)
+            loss = F.binary_cross_entropy(probabilities, targets)   
+                     
+        return x, loss
+        return x
+    
+#==================================
+# LOSS ESTIMATOR
+#================================== 
+@torch.no_grad()
+def estimate_loss():
+    out = {}
+    model.eval()
+    for split in ['train', 'eval']:
+        losses = torch.zeros(eval_iters)
+        for k in range(eval_iters):
+            X, Y = get_batch(split)
+            probs, loss = model(X, Y)
+            losses[k] = loss.item()
+        out[split] = losses.mean()
+    model.train()
+    return out
 
 #==================================
 # DATA PREPROCESSING
@@ -654,16 +686,61 @@ X_unseg, Y_unseg, X_eval_unseg, Y_eval_unseg = generate_unsegmented_dataset(file
 # Making the dataset segmented 
 X, Y, X_eval, Y_eval = segmented_dataset_builder(X_unseg, Y_unseg, X_eval_unseg,
                                                   Y_eval_unseg, segment_length=L, dim=1)   # segment along column dimension, not row dimension
+# Create the model
+model = EEGFormer(B, S, C, L, M).to(device)
 
-# TESTING THE EEG FORMER INFERNCE
+# FOR TESTING THE EEG FORMER INFERENCE
 # xb, yb = get_batch('train') # e.g. shape can be of form [batch_size, no_of_channels, segment_length] or [4, 21, 50]
-# model = EEGFormer(B, S, C, L, M)
+# model = EEGFormer(B, S, C, L, M).to(device)
 # prediction = model(xb)
 # print(f'Prediction: {prediction}')
 
 #==================================
 # TRAINING LOOP
 #==================================
+# Create a list to store training and validation losses
+train_losses = []
+val_losses = []
 
+# Optimizer
+optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+
+# Training loop
+for iter in range(max_iters):
+    # Every once in a while, evaluate the loss on train and val sets
+    if iter % eval_interval == 0 or iter == max_iters - 1:
+        losses = estimate_loss()
+        train_loss = losses['train']
+        val_loss = losses['eval']
+        print(f"Step {iter}: Train Loss {train_loss:.4f}, Val Loss {val_loss:.4f}")
+
+        # Append losses to the lists
+        train_losses.append(train_loss)
+        val_losses.append(val_loss)
+
+        # Log the losses to a text file
+        with open(log_file_path, "a") as log_file:
+            log_file.write(f"Step {iter}: Train Loss {train_loss:.4f}, Val Loss {val_loss:.4f}\n")
+
+    # Sample a batch of data
+    xb, yb = get_batch('train')
+
+    # Evaluate the loss
+    logits, loss = model(xb, yb)
+    optimizer.zero_grad(set_to_none=True)
+    loss.backward()
+    optimizer.step()
+
+
+#==================================
+# POST TRAINING STATISTICS
+#==================================
+plt.figure(figsize=(10, 5))
+plt.plot(train_losses, label='Train Loss')
+plt.plot(val_losses, label='Validation Loss')
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.legend()
+plt.show()
 
 
