@@ -9,13 +9,12 @@ block_size = 32 # what is the maximum context length for predictions?
 max_iters = 5000
 eval_interval = 100
 learning_rate = 1e-3
-# device = 'cuda' if torch.cuda.is_available() else 'cpu'
-device = 'cuda'
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
 eval_iters = 200
-n_embd = 4096
-n_head = 16
-n_layer = 8
-dropout = 0.00
+n_embd = 128
+n_head = 8
+n_layer = 4
+dropout = 0.0
 # ------------
 
 torch.manual_seed(1337)
@@ -24,17 +23,42 @@ torch.manual_seed(1337)
 with open('input.txt', 'r', encoding='utf-8') as f:
     text = f.read()
 
-# here are all the unique characters that occur in this text
-chars = sorted(list(set(text)))
-vocab_size = len(chars)
-# create a mapping from characters to integers
-stoi = { ch:i for i,ch in enumerate(chars) }
-itos = { i:ch for i,ch in enumerate(chars) }
-encode = lambda s: [stoi[c] for c in s] # encoder: take a string, output a list of integers
-decode = lambda l: ''.join([itos[i] for i in l]) # decoder: take a list of integers, output a string
+# let's now encode the entire text dataset and store it into a torch.Tensor
+import torch # we use PyTorch: https://pytorch.org
+import string
+import re
 
-# Train and test splits
-data = torch.tensor(encode(text), dtype=torch.long)
+def preprocess_text(text):
+    # Remove punctuation
+    translator = str.maketrans('', '', string.punctuation)
+    text = text.translate(translator)
+
+    # Convert to lowercase
+    text = text.lower()
+
+    # Remove extra whitespace
+    text = re.sub(r'\s+', ' ', text).strip()
+
+    return text
+
+text = preprocess_text(text)
+
+# here are all the unique characters that occur in this text
+words = sorted(list(set(text.split(' '))))
+vocab_size = len(words)
+
+# create a mapping from words to integers
+stoi = { wd:i for i,wd in enumerate(words) }
+itos = { i:wd for i,wd in enumerate(words) }
+
+# Lambda function to encode a list of words to their corresponding numbers
+encode = lambda word_list: [stoi[word] for word in word_list]
+
+# Lambda function to decode a list of numbers to their corresponding words
+decode = lambda number_list: " ".join([itos[number] for number in number_list])
+
+data = torch.tensor(encode(text.split(" ")), dtype=torch.long)
+print(data.shape, data.dtype)
 n = int(0.9*len(data)) # first 90% will be train, rest val
 train_data = data[:n]
 val_data = data[n:]
@@ -216,13 +240,17 @@ print('training completed successfully')
 duration = end_time - start_time
 
 # Log the time taken to a file
-log_file_path = "training_time_log.txt"
+log_file_path = "word_level_model.txt"
 with open(log_file_path, "w") as log_file:
     log_file.write(f"Training duration: {duration:.2f} seconds")
+    log_file.write("\n")
+    # generate from the model
+    context = torch.zeros((1, 1), dtype=torch.long, device=device)
+    log_file.write(decode(m.generate(context, max_new_tokens=512)[0].tolist()))
 
 print(f"Training duration: {duration:.2f} seconds")
-print("=========================================================================")
 
-# generate from the model
-context = torch.zeros((1, 1), dtype=torch.long, device=device)
-print(decode(m.generate(context, max_new_tokens=2000)[0].tolist()))
+
+
+
+
