@@ -4,19 +4,29 @@ from torch.nn import functional as F
 import time
 
 # hyperparameters
-batch_size = 32 # how many independent sequences will we process in parallel?
-block_size = 32 # what is the maximum context length for predictions?
-max_iters = 5000
-eval_interval = 100
-learning_rate = 1e-3
-# device = 'cuda' if torch.cuda.is_available() else 'cpu'
-device = 'cuda'
-eval_iters = 200
-n_embd = 4096
-n_head = 16
-n_layer = 8
-dropout = 0.00
+from config import (batch_size, block_size, max_iters,
+                    eval_interval, learning_rate, device,
+                    eval_iters, n_embd, n_layer, dropout)
+sqrt_d = torch.sqrt(torch.tensor(n_embd)).int().item()
+n_head = sqrt_d // 5
 # ------------
+
+# Function to log hyperparameters
+def log_hyperparameters(log_file):
+    log_file.write("\n")
+    log_file.write("Hyperparameters:\n")
+    log_file.write(f"batch_size = {batch_size}\n")
+    log_file.write(f"block_size = {block_size}\n")
+    log_file.write(f"max_iters = {max_iters}\n")
+    log_file.write(f"eval_interval = {eval_interval}\n")
+    log_file.write(f"learning_rate = {learning_rate}\n")
+    log_file.write(f"device = {device}\n")
+    log_file.write(f"eval_iters = {eval_iters}\n")
+    log_file.write(f"n_embd = {n_embd}\n")
+    log_file.write(f"n_head = {n_head}\n")
+    log_file.write(f"n_layer = {n_layer}\n")
+    log_file.write(f"dropout = {dropout}\n")
+    log_file.write("\n")
 
 torch.manual_seed(1337)
 
@@ -24,17 +34,42 @@ torch.manual_seed(1337)
 with open('input.txt', 'r', encoding='utf-8') as f:
     text = f.read()
 
-# here are all the unique characters that occur in this text
-chars = sorted(list(set(text)))
-vocab_size = len(chars)
-# create a mapping from characters to integers
-stoi = { ch:i for i,ch in enumerate(chars) }
-itos = { i:ch for i,ch in enumerate(chars) }
-encode = lambda s: [stoi[c] for c in s] # encoder: take a string, output a list of integers
-decode = lambda l: ''.join([itos[i] for i in l]) # decoder: take a list of integers, output a string
+# let's now encode the entire text dataset and store it into a torch.Tensor
+import torch # we use PyTorch: https://pytorch.org
+import string
+import re
 
-# Train and test splits
-data = torch.tensor(encode(text), dtype=torch.long)
+def preprocess_text(text):
+    # Remove punctuation
+    translator = str.maketrans('', '', string.punctuation)
+    text = text.translate(translator)
+
+    # Convert to lowercase
+    text = text.lower()
+
+    # # Remove extra whitespace
+    # text = re.sub(r'\s+', ' ', text).strip()
+
+    return text
+
+text = preprocess_text(text)
+
+# here are all the unique characters that occur in this text
+words = sorted(list(set(text.split(' '))))
+vocab_size = len(words)
+
+# create a mapping from words to integers
+stoi = { wd:i for i,wd in enumerate(words) }
+itos = { i:wd for i,wd in enumerate(words) }
+
+# Lambda function to encode a list of words to their corresponding numbers
+encode = lambda word_list: [stoi[word] for word in word_list]
+
+# Lambda function to decode a list of numbers to their corresponding words
+decode = lambda number_list: " ".join([itos[number] for number in number_list])
+
+data = torch.tensor(encode(text.split(" ")), dtype=torch.long)
+print(data.shape, data.dtype)
 n = int(0.9*len(data)) # first 90% will be train, rest val
 train_data = data[:n]
 val_data = data[n:]
@@ -216,13 +251,22 @@ print('training completed successfully')
 duration = end_time - start_time
 
 # Log the time taken to a file
-log_file_path = "character_level_model.txt"
-with open(log_file_path, "w") as log_file:
-    log_file.write(f"Training duration: {duration:.2f} seconds")
-    log_file.write("\n")
+log_file_path = "word_level_model.txt"
+with open(log_file_path, "a") as log_file:
+    log_file.write(f"Training duration: {duration:.2f} seconds\n")
+    log_file.write(str(sum(p.numel() for p in m.parameters())/1e6) + ' M parameters' + "\n")
+    log_file.write(str(sum(p.numel() for p in m.parameters())/1e9) + ' B parameters')
+    # Log hyperparameters
+    log_hyperparameters(log_file)
     # generate from the model
-    context = torch.zeros((1, 1), dtype=torch.long, device=device)
+    context = torch.zeros((batch_size, block_size), dtype=torch.long, device=device)
+    log_file.write(f"\n=========================================================\n")
     log_file.write(decode(m.generate(context, max_new_tokens=512)[0].tolist()))
+    log_file.write(f"\n=========================================================\n")
 
 print(f"Training duration: {duration:.2f} seconds")
+
+
+
+
 
