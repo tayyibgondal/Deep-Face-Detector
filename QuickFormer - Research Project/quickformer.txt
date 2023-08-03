@@ -308,7 +308,7 @@ n_head = 10
 n_layer = 16
 dropout = 0.001
 
-Perplexity of generated text is: 1407.2463424642306
+Perplexity of generated text is: 1707.2463424642306
 
 step 0: train loss 10.6169, val loss 10.6117
 step 100: train loss 7.7324, val loss 8.0529
